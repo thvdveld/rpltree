@@ -1,0 +1,12 @@
+[package]
+name = "visual-rpl"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.0.2", features = ["derive"] }
+rand = "0.8.5"
+rtshark = "2.3.1"
+termtree = "0.4.0"

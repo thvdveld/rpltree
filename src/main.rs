@@ -1,5 +1,5 @@
 use clap::Parser;
-use colored::*;
+use colored::Colorize;
 
 use std::{net::Ipv6Addr, str::FromStr};
 
@@ -10,8 +10,6 @@ struct Args {
     #[arg(short, long)]
     file: Option<std::path::PathBuf>,
 }
-
-const PREFIX: &str = "fd00";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Mote {
@@ -149,13 +147,6 @@ fn main() {
         eprintln!("Error parsing TShark output: {e}");
         None
     }) {
-        //for layer in packet.iter() {
-        //println!("Layer: {}", layer.name());
-        //for metadata in layer.iter() {
-        //println!("\t{}", metadata.name());
-        //}
-        //}
-
         let src_address = if let Some(ip_layer) = packet.layer_name("ipv6") {
             ip_layer.metadata("ipv6.src").map(|meta| {
                 let value = if meta.value().starts_with("::") {
@@ -230,17 +221,15 @@ fn main() {
                 };
 
                 if mote.set_parent(parent) {
-                    //println!("{:#?}", motes.motes);
-
                     if let Some(layer) = packet.layer_name("frame") {
                         println!(
                             "{}",
                             format!(
-                                "New tree at {}",
-                                layer.metadata("frame.time").unwrap().value()
+                                "New tree at {} (+ {})",
+                                layer.metadata("frame.time").unwrap().value(),
+                                layer.metadata("frame.time_relative").unwrap().value()
                             )
                             .underline()
-                            .to_string()
                         );
                     }
 

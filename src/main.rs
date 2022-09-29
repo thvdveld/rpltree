@@ -2,7 +2,6 @@ use clap::Parser;
 
 use std::{net::Ipv6Addr, str::FromStr};
 
-/// Simple program to greet a person
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -31,6 +30,9 @@ impl Mote {
 
     pub fn set_parent(&mut self, address: Ipv6Addr) -> bool {
         let changed = self.parent != Some(address);
+        //if changed {
+            //println!("{} -> new parent: {address}", self.ip);
+        //}
         self.parent = Some(address);
         changed
     }
@@ -61,19 +63,27 @@ impl Motes {
         if self.motes.is_empty() {
             return;
         }
-        let mut root_mote = Some(self.motes[0].ip);
+
+        let mut trees = vec![];
+
+        let mut roots = vec![];
 
         for mote in &self.motes {
             if mote.parent.is_none() {
-                root_mote = Some(mote.ip);
+                roots.push(mote);
             }
         }
 
-        let mut root = termtree::Tree::new(root_mote.unwrap().to_string());
+        for root in &roots {
+            let mut tree = termtree::Tree::new(root.ip.to_string());
+            self.add_to_tree(&mut tree, Some(root.ip));
 
-        self.add_to_tree(&mut root, root_mote);
+            trees.push(tree);
+        }
 
-        println!("{root}");
+        for tree in &trees {
+            println!("{tree}");
+        }
     }
 
     fn add_to_tree(&self, tree: &mut termtree::Tree<String>, parent: Option<Ipv6Addr>) {
@@ -117,22 +127,59 @@ fn main() {
         eprintln!("Error parsing TShark output: {e}");
         None
     }) {
-        if let Some(layer) = packet.layer_name("ipv6") {
-            if let Some(meta) = layer.metadata("ipv6.src") {
-                if meta.value().starts_with("::") {
-                    let address =
-                        Ipv6Addr::from_str(&format!("{}{}", PREFIX, meta.value())).unwrap();
+        //for layer in packet.iter() {
+            //println!("Layer: {}", layer.name());
+            //for metadata in layer.iter() {
+                //println!("\t{}", metadata.name());
+            //}
+        //}
 
-                    if !motes.contains(address) {
-                        motes.add(Mote::new(address));
-                    }
-                }
+        let src_address = if let Some(ip_layer) = packet.layer_name("ipv6") {
+            ip_layer.metadata("ipv6.src").map(|meta| {
+                let value = if meta.value().starts_with("::") {
+                    format!("fe80{}", meta.value())
+                } else {
+                    meta.value().to_string().replace("fd00", "fe80")
+                };
+                Ipv6Addr::from_str(&value).unwrap()
+            })
+        } else {
+            None
+        };
+
+        if let Some(addr) = src_address {
+            if !motes.contains(addr) {
+                motes.add(Mote::new(addr));
             }
         }
 
         if let Some(layer) = packet.layer_name("icmpv6") {
-            let src_address = if let Some(meta) = layer.metadata("icmpv6.rpl.opt.target.prefix") {
-                Ipv6Addr::from_str(meta.value()).unwrap().into()
+            if let Some(code) = layer.metadata("icmpv6.code") {
+                if code.value() != "2" {
+                    continue;
+                }
+            }
+
+            let src_address = if src_address.is_none() {
+                if let Some(meta) = layer.metadata("icmpv6.rpl.opt.target.prefix") {
+                    Ipv6Addr::from_str(meta.value()).unwrap().into()
+                } else {
+                    None
+                }
+            } else {
+                src_address
+            };
+
+            if let Some(addr) = src_address {
+                if !motes.contains(addr) {
+                    motes.add(Mote::new(addr));
+                }
+            }
+
+            let parent = if let Some(layer) = packet.layer_name("ipv6") {
+                layer
+                    .metadata("ipv6.dst")
+                    .map(|meta| Ipv6Addr::from_str(meta.value()).unwrap())
             } else {
                 None
             };
@@ -140,7 +187,17 @@ fn main() {
             let parent = if let Some(meta) = layer.metadata("icmpv6.rpl.opt.transit.parent") {
                 Ipv6Addr::from_str(meta.value()).unwrap().into()
             } else {
-                None
+                parent
+            };
+
+            let parent = if let Some(parent) = parent {
+                if parent.is_multicast() {
+                    None
+                } else {
+                    Some(Ipv6Addr::from_str(&parent.to_string().replace("fd00", "fe80")).unwrap())
+                }
+            } else {
+                parent
             };
 
             if let (Some(src_address), Some(parent)) = (src_address, parent) {
@@ -151,6 +208,8 @@ fn main() {
                 };
 
                 if mote.set_parent(parent) {
+                    //println!("{:#?}", motes.motes);
+
                     if let Some(layer) = packet.layer_name("frame") {
                         println!(
                             "New tree at {}",

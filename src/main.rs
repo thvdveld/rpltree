@@ -1,4 +1,5 @@
 use clap::Parser;
+use colored::*;
 
 use std::{net::Ipv6Addr, str::FromStr};
 
@@ -17,6 +18,7 @@ struct Mote {
     id: usize,
     ip: Ipv6Addr,
     parent: Option<Ipv6Addr>,
+    updated: bool,
 }
 
 impl Mote {
@@ -25,13 +27,15 @@ impl Mote {
             id: rand::random(),
             ip: address,
             parent: None,
+            updated: false,
         }
     }
 
     pub fn set_parent(&mut self, address: Ipv6Addr) -> bool {
         let changed = self.parent != Some(address);
+        self.updated = changed;
         //if changed {
-            //println!("{} -> new parent: {address}", self.ip);
+        //println!("{} -> new parent: {address}", self.ip);
         //}
         self.parent = Some(address);
         changed
@@ -59,7 +63,7 @@ impl Motes {
         self.motes.push(mote);
     }
 
-    pub fn showtree(&self) {
+    pub fn showtree(&mut self) {
         if self.motes.is_empty() {
             return;
         }
@@ -75,7 +79,11 @@ impl Motes {
         }
 
         for root in &roots {
-            let mut tree = termtree::Tree::new(root.ip.to_string());
+            let mut tree = termtree::Tree::new(if root.updated {
+                root.ip.to_string().magenta().italic().bold().to_string()
+            } else {
+                root.ip.to_string()
+            });
             self.add_to_tree(&mut tree, Some(root.ip));
 
             trees.push(tree);
@@ -84,12 +92,26 @@ impl Motes {
         for tree in &trees {
             println!("{tree}");
         }
+
+        for mote in &mut self.motes {
+            mote.updated = false;
+        }
     }
 
     fn add_to_tree(&self, tree: &mut termtree::Tree<String>, parent: Option<Ipv6Addr>) {
         for mote in &self.motes {
             if mote.parent == parent {
-                let mut sub = termtree::Tree::new(mote.ip.to_string());
+                let mut sub = termtree::Tree::new(if mote.updated {
+                    mote.ip
+                        .to_string()
+                        .magenta()
+                        .italic()
+                        .underline()
+                        .bold()
+                        .to_string()
+                } else {
+                    mote.ip.to_string()
+                });
                 self.add_to_tree(&mut sub, Some(mote.ip));
                 tree.push(sub);
             }
@@ -128,10 +150,10 @@ fn main() {
         None
     }) {
         //for layer in packet.iter() {
-            //println!("Layer: {}", layer.name());
-            //for metadata in layer.iter() {
-                //println!("\t{}", metadata.name());
-            //}
+        //println!("Layer: {}", layer.name());
+        //for metadata in layer.iter() {
+        //println!("\t{}", metadata.name());
+        //}
         //}
 
         let src_address = if let Some(ip_layer) = packet.layer_name("ipv6") {
@@ -212,8 +234,13 @@ fn main() {
 
                     if let Some(layer) = packet.layer_name("frame") {
                         println!(
-                            "New tree at {}",
-                            layer.metadata("frame.time").unwrap().value()
+                            "{}",
+                            format!(
+                                "New tree at {}",
+                                layer.metadata("frame.time").unwrap().value()
+                            )
+                            .underline()
+                            .to_string()
                         );
                     }
 

@@ -1,7 +1,8 @@
 use clap::Parser;
 use colored::Colorize;
+use pcap::Capture;
 
-use std::{net::Ipv6Addr, str::FromStr};
+use smoltcp::{phy::ChecksumCapabilities, wire::*};
 
 mod motes;
 use motes::*;
@@ -21,127 +22,75 @@ fn main() {
 
     let path = if let Some(ref file) = args.file {
         log::trace!("parsing PCAP file");
-        file.to_str().unwrap().to_string()
+        file
     } else {
-        log::trace!("parsing STDIN");
-        "/dev/stdin".to_string()
+        log::trace!("parsing from pipe");
+        std::path::Path::new("/dev/stdin")
     };
 
-    let mut builder = rtshark::RTSharkBuilder::builder().input_path(&path);
-
-    if args.file.is_none() {
-        builder = builder.live_capture();
-    }
-
-    let mut rtshark = match builder.spawn() {
-        Err(err) => {
-            log::error!("error running tshark: {err}");
-            return;
-        }
-        Ok(rtshark) => rtshark,
-    };
+    let mut pcap = Capture::from_file(path).unwrap();
 
     let mut motes = Motes::default();
 
-    log::trace!("Starting parsing...");
-    // read packets until the end of the PCAP file
-    while let Some(packet) = rtshark.read().unwrap_or_else(|e| {
-        log::error!("Error parsing TShark output: {e}");
-        None
-    }) {
-        log::trace!("Reading packet..");
-        let src_address = if let Some(ip_layer) = packet.layer_name("ipv6") {
-            ip_layer.metadata("ipv6.src").map(|meta| {
-                let value = if meta.value().starts_with("::") {
-                    format!("fe80{}", meta.value())
-                } else {
-                    meta.value().to_string().replace("fd00", "fe80")
-                };
-                Ipv6Addr::from_str(&value).unwrap()
-            })
-        } else {
-            None
-        };
+    while let Ok(packet) = pcap.next_packet() {
+        if let Ok(packet) = Ieee802154Frame::new_checked(packet.data) {
+            let repr = Ieee802154Repr::parse(&packet).unwrap();
+            if let Some(payload) = packet.payload() {
+                if let Ok(packet) = SixlowpanIphcPacket::new_checked(payload) {
+                    if let Ok(repr) =
+                        SixlowpanIphcRepr::parse(&packet, repr.src_addr, repr.dst_addr)
+                    {
+                        let src_addr = repr.src_addr;
 
-        if let Some(addr) = src_address {
-            if !motes.contains(addr) {
-                log::trace!("Adding new mote with address {addr}");
-                println!("{}", "Added new mote".underline());
-                let mut mote = Mote::new(addr);
-                mote.set_updated();
-                motes.add(mote);
-                motes.showtree();
-            }
-        }
+                        if !motes.contains(src_addr.into()) {
+                            log::trace!("Adding new mote with address {src_addr}");
+                            println!("{}", "Added new mote".underline());
+                            let mut mote = Mote::new(src_addr.into());
+                            mote.set_updated();
+                            motes.add(mote);
+                            motes.showtree();
+                        }
 
-        if let Some(layer) = packet.layer_name("icmpv6") {
-            if let Some(code) = layer.metadata("icmpv6.code") {
-                if code.value() != "2" {
-                    continue;
-                }
-            }
+                        let parent = repr.dst_addr;
 
-            let src_address = if src_address.is_none() {
-                if let Some(meta) = layer.metadata("icmpv6.rpl.opt.target.prefix") {
-                    Ipv6Addr::from_str(meta.value()).unwrap().into()
-                } else {
-                    None
-                }
-            } else {
-                src_address
-            };
-
-            if let Some(addr) = src_address {
-                if !motes.contains(addr) {
-                    motes.add(Mote::new(addr));
-                }
-            }
-
-            let parent = if let Some(layer) = packet.layer_name("ipv6") {
-                layer
-                    .metadata("ipv6.dst")
-                    .map(|meta| Ipv6Addr::from_str(meta.value()).unwrap())
-            } else {
-                None
-            };
-
-            let parent = if let Some(meta) = layer.metadata("icmpv6.rpl.opt.transit.parent") {
-                Ipv6Addr::from_str(meta.value()).unwrap().into()
-            } else {
-                parent
-            };
-
-            let parent = if let Some(parent) = parent {
-                if parent.is_multicast() {
-                    None
-                } else {
-                    Some(Ipv6Addr::from_str(&parent.to_string().replace("fd00", "fe80")).unwrap())
-                }
-            } else {
-                parent
-            };
-
-            if let (Some(src_address), Some(parent)) = (src_address, parent) {
-                let mote = if motes.contains(src_address) {
-                    motes.get_mut(src_address)
-                } else {
-                    unreachable!();
-                };
-
-                if mote.set_parent(parent) {
-                    if let Some(layer) = packet.layer_name("frame") {
-                        println!(
-                            "{}",
-                            format!(
-                                "New tree at {} (+ {})",
-                                layer.metadata("frame.time").unwrap().value(),
-                                layer.metadata("frame.time_relative").unwrap().value()
-                            )
-                            .underline()
-                        );
+                        if let Ok(icmp) = Icmpv6Packet::new_checked(packet.payload()) {
+                            if let Ok(Icmpv6Repr::Rpl(RplRepr::DestinationAdvertisementObject {
+                                options,
+                                ..
+                            })) = Icmpv6Repr::parse(
+                                &repr.src_addr.into(),
+                                &repr.dst_addr.into(),
+                                &icmp,
+                                &ChecksumCapabilities::ignored(),
+                            ) {
+                                let parent = if !options.is_empty() {
+                                    let option = RplOptionPacket::new_unchecked(options);
+                                    match RplOptionRepr::parse(&option).unwrap() {
+                                        RplOptionRepr::TransitInformation {
+                                            parent_address,
+                                            ..
+                                        } => {
+                                            if let Some(new_parent) = parent_address {
+                                                new_parent
+                                            } else {
+                                                parent
+                                            }
+                                        }
+                                        _ => parent,
+                                    }
+                                } else {
+                                    parent
+                                };
+                                if motes.contains(src_addr.into()) {
+                                    let mote = motes.get_mut(src_addr.into());
+                                    if mote.set_parent(parent.into()) {
+                                        println!("{}", "New tree".underline());
+                                        motes.showtree();
+                                    }
+                                }
+                            }
+                        }
                     }
-
-                    motes.showtree();
                 }
             }
         }

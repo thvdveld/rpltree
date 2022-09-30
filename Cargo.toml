@@ -17,6 +17,10 @@ clap = { version = "4.0.2", features = ["derive"] }
 colored = "2.0.0"
 env_logger = "0.9.1"
 log = "0.4.17"
+pcap = "0.10.1"
 rand = "0.8.5"
-rtshark = "2.3.1"
+smoltcp = "0.8.1"
 termtree = "0.4.0"
+
+[patch.crates-io]
+smoltcp = { git = 'https://github.com/thvdveld/smoltcp/', branch = "rpl-wire" }

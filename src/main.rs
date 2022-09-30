@@ -3,6 +3,9 @@ use colored::Colorize;
 
 use std::{net::Ipv6Addr, str::FromStr};
 
+mod motes;
+use motes::*;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -11,118 +14,16 @@ struct Args {
     file: Option<std::path::PathBuf>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct Mote {
-    id: usize,
-    ip: Ipv6Addr,
-    parent: Option<Ipv6Addr>,
-    updated: bool,
-}
-
-impl Mote {
-    pub fn new(address: Ipv6Addr) -> Self {
-        Self {
-            id: rand::random(),
-            ip: address,
-            parent: None,
-            updated: false,
-        }
-    }
-
-    pub fn set_parent(&mut self, address: Ipv6Addr) -> bool {
-        let changed = self.parent != Some(address);
-        self.updated = changed;
-        //if changed {
-        //println!("{} -> new parent: {address}", self.ip);
-        //}
-        self.parent = Some(address);
-        changed
-    }
-}
-
-#[derive(Debug, Default)]
-struct Motes {
-    motes: Vec<Mote>,
-}
-
-impl Motes {
-    pub fn contains(&self, address: Ipv6Addr) -> bool {
-        self.motes.iter().any(|mote| mote.ip == address)
-    }
-
-    pub fn get_mut(&mut self, address: Ipv6Addr) -> &mut Mote {
-        self.motes
-            .iter_mut()
-            .find(|mote| mote.ip == address)
-            .unwrap()
-    }
-
-    pub fn add(&mut self, mote: Mote) {
-        self.motes.push(mote);
-    }
-
-    pub fn showtree(&mut self) {
-        if self.motes.is_empty() {
-            return;
-        }
-
-        let mut trees = vec![];
-
-        let mut roots = vec![];
-
-        for mote in &self.motes {
-            if mote.parent.is_none() {
-                roots.push(mote);
-            }
-        }
-
-        for root in &roots {
-            let mut tree = termtree::Tree::new(if root.updated {
-                root.ip.to_string().magenta().italic().bold().to_string()
-            } else {
-                root.ip.to_string()
-            });
-            self.add_to_tree(&mut tree, Some(root.ip));
-
-            trees.push(tree);
-        }
-
-        for tree in &trees {
-            println!("{tree}");
-        }
-
-        for mote in &mut self.motes {
-            mote.updated = false;
-        }
-    }
-
-    fn add_to_tree(&self, tree: &mut termtree::Tree<String>, parent: Option<Ipv6Addr>) {
-        for mote in &self.motes {
-            if mote.parent == parent {
-                let mut sub = termtree::Tree::new(if mote.updated {
-                    mote.ip
-                        .to_string()
-                        .magenta()
-                        .italic()
-                        .underline()
-                        .bold()
-                        .to_string()
-                } else {
-                    mote.ip.to_string()
-                });
-                self.add_to_tree(&mut sub, Some(mote.ip));
-                tree.push(sub);
-            }
-        }
-    }
-}
-
 fn main() {
+    env_logger::init();
+
     let args = Args::parse();
 
     let path = if let Some(ref file) = args.file {
+        log::trace!("parsing PCAP file");
         file.to_str().unwrap().to_string()
     } else {
+        log::trace!("parsing STDIN");
         "/dev/stdin".to_string()
     };
 
@@ -134,7 +35,7 @@ fn main() {
 
     let mut rtshark = match builder.spawn() {
         Err(err) => {
-            eprintln!("Error running tshark: {err}");
+            log::error!("error running tshark: {err}");
             return;
         }
         Ok(rtshark) => rtshark,
@@ -142,11 +43,13 @@ fn main() {
 
     let mut motes = Motes::default();
 
+    log::trace!("Starting parsing...");
     // read packets until the end of the PCAP file
     while let Some(packet) = rtshark.read().unwrap_or_else(|e| {
-        eprintln!("Error parsing TShark output: {e}");
+        log::error!("Error parsing TShark output: {e}");
         None
     }) {
+        log::trace!("Reading packet..");
         let src_address = if let Some(ip_layer) = packet.layer_name("ipv6") {
             ip_layer.metadata("ipv6.src").map(|meta| {
                 let value = if meta.value().starts_with("::") {
@@ -162,7 +65,12 @@ fn main() {
 
         if let Some(addr) = src_address {
             if !motes.contains(addr) {
-                motes.add(Mote::new(addr));
+                log::trace!("Adding new mote with address {addr}");
+                println!("{}", "Added new mote".underline());
+                let mut mote = Mote::new(addr);
+                mote.set_updated();
+                motes.add(mote);
+                motes.showtree();
             }
         }
 

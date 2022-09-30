@@ -1,6 +1,6 @@
 [package]
 name = "rpltree"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Thibaut Vandervelden <thvdveld@vub.be>", "Diana Deac"]
 description = "A PCAP parser to display the RPL tree from RPL ICMP messages."

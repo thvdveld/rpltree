@@ -20,5 +20,5 @@ log = "0.4.17"
 pcap = "0.10.1"
 rand = "0.8.5"
 #smoltcp = "0.8.1"
-smoltcp = { git = 'https://github.com/thvdveld/smoltcp/', branch = "rpl-wire" }
+smoltcp = { version = "0.8.1", git = 'https://github.com/thvdveld/smoltcp/', branch = "rpl-wire" }
 termtree = "0.4.0"

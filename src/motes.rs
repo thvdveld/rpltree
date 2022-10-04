@@ -39,7 +39,14 @@ pub struct Motes {
 
 impl Motes {
     pub fn contains(&self, address: Ipv6Addr) -> bool {
-        self.motes.iter().any(|mote| mote.ip == address)
+        let mut address = address.octets();
+        address[..2].copy_from_slice(&[0u8; 2]);
+
+        self.motes.iter().any(|mote| {
+            let mut mote_address = mote.ip.octets();
+            mote_address[..2].copy_from_slice(&[0u8; 2]);
+            mote_address == address
+        })
     }
 
     pub fn get_mut(&mut self, address: Ipv6Addr) -> &mut Mote {

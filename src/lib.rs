@@ -34,7 +34,7 @@ impl Mote {
 
 #[derive(Debug, Default)]
 pub struct Motes {
-    motes: Vec<Mote>,
+    pub motes: Vec<Mote>,
 }
 
 impl Motes {
@@ -60,9 +60,9 @@ impl Motes {
         self.motes.push(mote);
     }
 
-    pub fn showtree(&mut self) {
+    pub fn showtree(&mut self) -> String {
         if self.motes.is_empty() {
-            return;
+            return "".into();
         }
 
         let mut trees = vec![];
@@ -86,13 +86,18 @@ impl Motes {
             trees.push(tree);
         }
 
+        let mut tree_string = String::new();
+
         for tree in &trees {
-            println!("{tree}");
+            tree_string.push_str(&format!("{tree}"));
+            tree_string.push('\n');
         }
 
         for mote in &mut self.motes {
             mote.updated = false;
         }
+
+        tree_string
     }
 
     fn add_to_tree(&self, tree: &mut termtree::Tree<String>, parent: Option<Ipv6Addr>) {
